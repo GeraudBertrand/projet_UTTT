@@ -1,20 +1,29 @@
 #include "UltimateBoard.h"
-#include <random>
 
 uint64_t UltimateBoard::zCells[81][2];
 uint64_t UltimateBoard::zTarget[10];
 uint64_t UltimateBoard::zSide;
 bool UltimateBoard::zInitialized = false;
 
+// xorshift64 : generateur pseudo-aleatoire ultra-simple.
+// Alternative a std::mt19937_64 qui evite d'inclure <random>.
+// Le seed est fixe pour avoir un hash Zobrist deterministe entre executions.
+static uint64_t xs_state = 0xC0FFEE12345ULL;
+static uint64_t xorshift64() {
+    xs_state ^= xs_state << 13;
+    xs_state ^= xs_state >> 7;
+    xs_state ^= xs_state << 17;
+    return xs_state;
+}
+
 void UltimateBoard::initZobrist() {
-    // Seed fixe pour que le hash soit deterministe entre executions
-    std::mt19937_64 rng(0xC0FFEE12345ULL);
+    xs_state = 0xC0FFEE12345ULL; // reset au cas ou
     for (int i = 0; i < 81; ++i)
         for (int p = 0; p < 2; ++p)
-            zCells[i][p] = rng();
+            zCells[i][p] = xorshift64();
     for (int i = 0; i < 10; ++i)
-        zTarget[i] = rng();
-    zSide = rng();
+        zTarget[i] = xorshift64();
+    zSide = xorshift64();
     zInitialized = true;
 }
 

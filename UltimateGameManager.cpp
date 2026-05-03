@@ -1,9 +1,7 @@
 #include "UltimateGameManager.h"
+#include <ctime>      // time, strftime, localtime
 #include <iostream>
 #include <vector>
-#include <ctime>
-#include <iomanip>
-#include <sstream>
 
 UltimateGameManager::UltimateGameManager()
     : myColor(PLAYER), opponentColor(IA),
@@ -25,22 +23,16 @@ UltimateGameManager::~UltimateGameManager() {
 }
 
 void UltimateGameManager::openLogFile() {
-    // Nom de fichier avec timestamp pour ne pas ecraser les runs precedents
-    std::time_t t = std::time(nullptr);
-    std::tm tm_local;
-#ifdef _WIN32
-    localtime_s(&tm_local, &t);
-#else
-    tm_local = *std::localtime(&t);
-#endif
-    std::ostringstream name;
-    name << "ai_log_"
-         << std::put_time(&tm_local, "%Y%m%d_%H%M%S")
-         << ".csv";
+    // Nom de fichier avec timestamp pour ne pas ecraser les runs precedents.
+    // strftime + localtime sont les fonctions C standard (plus simples que
+    // std::put_time + std::ostringstream).
+    time_t t = time(NULL);
+    char filename[64];
+    strftime(filename, sizeof(filename), "ai_log_%Y%m%d_%H%M%S.csv", localtime(&t));
 
-    logFile.open(name.str());
+    logFile.open(filename);
     if (!logFile.is_open()) {
-        std::cerr << "[Logger] Impossible d'ouvrir " << name.str() << std::endl;
+        std::cerr << "[Logger] Impossible d'ouvrir " << filename << std::endl;
         return;
     }
 
@@ -49,7 +41,7 @@ void UltimateGameManager::openLogFile() {
                "depth,score,elapsed_ms,legal_count,had_local_win,took_local_win,result"
             << std::endl;
     logFile.flush();
-    std::cout << "[Logger] Ecriture vers " << name.str() << std::endl;
+    std::cout << "[Logger] Ecriture vers " << filename << std::endl;
 }
 
 void UltimateGameManager::writeGameStartRow() {

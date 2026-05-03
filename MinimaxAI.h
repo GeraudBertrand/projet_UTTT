@@ -2,7 +2,7 @@
 #define MINIMAXAI_H
 
 #include <cstdint>
-#include <chrono>
+#include <ctime>      // clock(), clock_t, CLOCKS_PER_SEC
 #include <string>
 #include <vector>
 #include "UltimateBoard.h"
@@ -61,20 +61,21 @@ private:
     // -------- Iterative deepening / time control --------
     int currentIterationDepth;   // profondeur de l'iteration ID en cours (sert au plyFromRoot)
     int budgetMs;                // 0 = illimite
-    std::chrono::steady_clock::time_point deadline;
+    clock_t deadline;            // tick d'horloge auquel on arrete
     bool aborted;
-    uint32_t nodeCount;          // pour throttler les checks d'horloge
+    unsigned int nodeCount;      // pour throttler les checks d'horloge
 
     bool timeExceeded();
 
     // -------- Transposition Table --------
-    enum TTBound : uint8_t { TT_EMPTY = 0, TT_EXACT = 1, TT_LOWER = 2, TT_UPPER = 3 };
+    // Enum classique (pas de "enum class") pour rester simple
+    enum TTBound { TT_EMPTY = 0, TT_EXACT = 1, TT_LOWER = 2, TT_UPPER = 3 };
 
     struct TTEntry {
         uint64_t hash;
-        int32_t  score;
-        int8_t   depth;
-        uint8_t  bound;     // TTBound
+        int      score;
+        int      depth;
+        int      bound;     // valeur TTBound
         GameMove bestMove;
     };
 

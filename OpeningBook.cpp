@@ -1,7 +1,7 @@
 #include "OpeningBook.h"
+#include <cstdio>     // sscanf, FILE-style parsing
 #include <fstream>
 #include <iostream>
-#include <sstream>
 
 OpeningBook::OpeningBook() {}
 
@@ -17,13 +17,13 @@ void OpeningBook::load(const std::string& filename) {
     int loaded = 0;
     while (std::getline(f, line)) {
         if (line.empty() || line[0] == '#') continue;
-        std::istringstream iss(line);
-        uint64_t hash = 0;
-        int row = -1, col = -1;
         // Format : <hash en hex> <row> <col>
-        if (iss >> std::hex >> hash >> std::dec >> row >> col) {
+        // sscanf est plus simple qu'un istringstream pour parser une ligne.
+        unsigned long long h;
+        int row, col;
+        if (std::sscanf(line.c_str(), "%llx %d %d", &h, &row, &col) == 3) {
             if (row >= 0 && row < 9 && col >= 0 && col < 9) {
-                entries[hash] = GameMove{row, col};
+                entries[(uint64_t)h] = GameMove{row, col};
                 ++loaded;
             }
         }

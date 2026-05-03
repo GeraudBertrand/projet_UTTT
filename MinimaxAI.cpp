@@ -1,8 +1,14 @@
 #include "MinimaxAI.h"
-#include <algorithm>
-#include <limits>
-#include <utility>
+#include <algorithm>   // std::fill, std::max, std::min
+#include <climits>     // INT_MIN, INT_MAX
+#include <ctime>       // clock(), CLOCKS_PER_SEC
 #include <iostream>
+
+// Petit helper : convertit un budget en millisecondes en nombre de ticks d'horloge.
+// CLOCKS_PER_SEC est typiquement 1000 (Linux) ou 1000 ms (Windows MinGW).
+static clock_t msToTicks(int ms) {
+    return (clock_t)((long long)ms * CLOCKS_PER_SEC / 1000);
+}
 
 MinimaxAI::MinimaxAI(Winner myColor_, Winner opponentColor_, int maxDepth_, int budgetTime_)
     : myColor(myColor_), opponentColor(opponentColor_), maxDepth(maxDepth_),
@@ -44,9 +50,9 @@ void MinimaxAI::resetSearchState() {
 
 bool MinimaxAI::timeExceeded() {
     if (budgetMs <= 0) return false;
-    // On n'appelle pas now() a chaque noeud (c'est cher) : un check tous les 4096 noeuds
+    // clock() est cher : on ne le verifie qu'un noeud sur 4096
     if ((++nodeCount & 0xFFF) != 0) return aborted;
-    if (std::chrono::steady_clock::now() >= deadline) aborted = true;
+    if (clock() >= deadline) aborted = true;
     return aborted;
 }
 
@@ -55,7 +61,7 @@ void MinimaxAI::clearTT() {
 }
 
 GameMove MinimaxAI::findBestMove(UltimateBoard& board) {
-    auto searchStart = std::chrono::steady_clock::now();
+    clock_t searchStart = clock();
 
     GameMove moves[81];
     int rootN = board.fillLegalMoves(moves);
@@ -105,8 +111,7 @@ GameMove MinimaxAI::findBestMove(UltimateBoard& board) {
     aborted = false;
     nodeCount = 0;
     if (effectiveBudgetMs > 0) {
-        deadline = std::chrono::steady_clock::now()
-                 + std::chrono::milliseconds(effectiveBudgetMs);
+        deadline = clock() + msToTicks(effectiveBudgetMs);
     }
 
     // Reset killers + history a chaque nouvelle position au root.
@@ -136,9 +141,9 @@ GameMove MinimaxAI::findBestMove(UltimateBoard& board) {
         orderMoves(board, moves, rootN, myColor, hasTT ? &ttMove : nullptr, 0);
 
         GameMove iterBestMove = moves[0];
-        int iterBestScore = std::numeric_limits<int>::min();
-        int alpha = std::numeric_limits<int>::min();
-        int beta  = std::numeric_limits<int>::max();
+        int iterBestScore = INT_MIN;
+        int alpha = INT_MIN;
+        int beta  = INT_MAX;
 
         for (int i = 0; i < rootN; ++i) {
             board.playMove(moves[i], myColor);
@@ -168,14 +173,11 @@ GameMove MinimaxAI::findBestMove(UltimateBoard& board) {
         if (bestScore >= MATE_THRESHOLD || bestScore <= -MATE_THRESHOLD) break;
 
         // Si la prochaine iteration n'a aucune chance de tenir dans le budget restant,
-        // on s'arrete maintenant pour garder un coup propre. Heuristique : la profondeur
-        // suivante coute typiquement 3-5x l'actuelle. Si on a deja consomme plus du tiers
-        // du budget, on coupe.
+        // on coupe. Heuristique : la profondeur suivante coute 3-5x la courante.
         if (effectiveBudgetMs > 0) {
-            auto now = std::chrono::steady_clock::now();
-            auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                deadline - now).count();
-            if (remaining <= effectiveBudgetMs / 3) break;
+            clock_t remainingTicks = deadline - clock();
+            long remainingMs = (long)((long long)remainingTicks * 1000 / CLOCKS_PER_SEC);
+            if (remainingMs <= effectiveBudgetMs / 3) break;
         }
     }
 
@@ -185,8 +187,7 @@ GameMove MinimaxAI::findBestMove(UltimateBoard& board) {
     }
 
     // Remplir les infos de diagnostic
-    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                       std::chrono::steady_clock::now() - searchStart).count();
+    long elapsedMs = (long)((long long)(clock() - searchStart) * 1000 / CLOCKS_PER_SEC);
     {
         int sR = bestMove.row / 3, sC = bestMove.col / 3;
         int lR = bestMove.row % 3, lC = bestMove.col % 3;
@@ -194,7 +195,7 @@ GameMove MinimaxAI::findBestMove(UltimateBoard& board) {
         lastInfo.bestMove        = bestMove;
         lastInfo.depthReached    = reachedDepth;
         lastInfo.score           = bestScore;
-        lastInfo.elapsedMs       = (long)elapsed;
+        lastInfo.elapsedMs       = elapsedMs;
         lastInfo.legalMovesCount = rootN;
         lastInfo.hadLocalWin     = hadLocalWin;
         lastInfo.tookLocalWin    = tookWin;
@@ -267,7 +268,7 @@ int MinimaxAI::minimax(UltimateBoard& board, int depth, int alpha, int beta, boo
     int sideIdx = maximizing ? 0 : 1;
 
     if (maximizing) {
-        best = std::numeric_limits<int>::min();
+        best = INT_MIN;
         for (int i = 0; i < n; ++i) {
             board.playMove(moves[i], myColor);
             int score = minimax(board, depth - 1, alpha, beta, false);
@@ -292,7 +293,7 @@ int MinimaxAI::minimax(UltimateBoard& board, int depth, int alpha, int beta, boo
             }
         }
     } else {
-        best = std::numeric_limits<int>::max();
+        best = INT_MAX;
         for (int i = 0; i < n; ++i) {
             board.playMove(moves[i], opponentColor);
             int score = minimax(board, depth - 1, alpha, beta, true);
@@ -603,20 +604,30 @@ int MinimaxAI::countOpenLines(const Winner sw[3][3], Winner who) const {
     // Une ligne est "ouverte" pour `who` si aucune de ses 3 cases ne contient
     // d'adversaire (Winner != who && != NO_WINNER). Les sous-grilles nulles
     // (encodees IA_AND_PLAYER en amont) bloquent donc bien les deux joueurs.
-    auto cellOk = [who](Winner x) {
-        return x == who || x == NO_WINNER;
-    };
-    auto isOpen = [&](Winner a, Winner b, Winner c) {
-        return cellOk(a) && cellOk(b) && cellOk(c);
+
+    // On enumere les 8 lignes (3 rangees + 3 colonnes + 2 diagonales).
+    // Tableau de 8 lignes x 3 cellules.
+    Winner lines[8][3] = {
+        { sw[0][0], sw[0][1], sw[0][2] },
+        { sw[1][0], sw[1][1], sw[1][2] },
+        { sw[2][0], sw[2][1], sw[2][2] },
+        { sw[0][0], sw[1][0], sw[2][0] },
+        { sw[0][1], sw[1][1], sw[2][1] },
+        { sw[0][2], sw[1][2], sw[2][2] },
+        { sw[0][0], sw[1][1], sw[2][2] },
+        { sw[0][2], sw[1][1], sw[2][0] },
     };
 
     int count = 0;
-    for (int i = 0; i < 3; ++i) {
-        if (isOpen(sw[i][0], sw[i][1], sw[i][2])) ++count;
-        if (isOpen(sw[0][i], sw[1][i], sw[2][i])) ++count;
+    for (int i = 0; i < 8; ++i) {
+        bool open = true;
+        for (int j = 0; j < 3; ++j) {
+            Winner x = lines[i][j];
+            // Cellule "OK" si elle est a `who` ou vide. Sinon, ligne bloquee.
+            if (x != who && x != NO_WINNER) { open = false; break; }
+        }
+        if (open) ++count;
     }
-    if (isOpen(sw[0][0], sw[1][1], sw[2][2])) ++count;
-    if (isOpen(sw[0][2], sw[1][1], sw[2][0])) ++count;
     return count;
 }
 
@@ -645,23 +656,29 @@ int MinimaxAI::evaluateSubBoard(const SubBoard& sb, Winner who) const {
 int MinimaxAI::countTwoInLine(const Winner cells[3][3], Winner who) const {
     // Une "menace" 2-en-ligne = exactement 2 cases a `who`, 1 case vide,
     // ET aucune case "bloquante" (adversaire ou case nulle marquee IA_AND_PLAYER).
-    auto check = [&](Winner a, Winner b, Winner c) -> int {
-        int mine = 0;
-        bool blocked = false;
-        auto eat = [&](Winner x) {
-            if      (x == who)        mine++;
-            else if (x != NO_WINNER)  blocked = true; // adversaire ou nulle (mur)
-        };
-        eat(a); eat(b); eat(c);
-        return (mine == 2 && !blocked) ? 1 : 0;
+
+    // Meme structure que countOpenLines : on enumere les 8 lignes.
+    Winner lines[8][3] = {
+        { cells[0][0], cells[0][1], cells[0][2] },
+        { cells[1][0], cells[1][1], cells[1][2] },
+        { cells[2][0], cells[2][1], cells[2][2] },
+        { cells[0][0], cells[1][0], cells[2][0] },
+        { cells[0][1], cells[1][1], cells[2][1] },
+        { cells[0][2], cells[1][2], cells[2][2] },
+        { cells[0][0], cells[1][1], cells[2][2] },
+        { cells[0][2], cells[1][1], cells[2][0] },
     };
 
     int total = 0;
-    for (int i = 0; i < 3; ++i) {
-        total += check(cells[i][0], cells[i][1], cells[i][2]);
-        total += check(cells[0][i], cells[1][i], cells[2][i]);
+    for (int i = 0; i < 8; ++i) {
+        int mine = 0;
+        bool blocked = false;
+        for (int j = 0; j < 3; ++j) {
+            Winner x = lines[i][j];
+            if (x == who)            mine++;
+            else if (x != NO_WINNER) blocked = true; // adversaire ou nulle
+        }
+        if (mine == 2 && !blocked) total++;
     }
-    total += check(cells[0][0], cells[1][1], cells[2][2]);
-    total += check(cells[0][2], cells[1][1], cells[2][0]);
     return total;
 }
