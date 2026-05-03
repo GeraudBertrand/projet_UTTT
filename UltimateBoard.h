@@ -58,7 +58,10 @@ public:
     int getMoveCount() const { return historySize; }
 
 private:
-    void updateOverallWinner();
+    // On passe la position de la sous-grille qui vient de changer.
+    // Ca evite de re-verifier les 8 lignes globales : seules 2-4 lignes
+    // passent par cette sous-grille.
+    void updateOverallWinner(int changedSR, int changedSC);
 
     // Tables Zobrist (initialisees une seule fois, partagees entre instances)
     static uint64_t zCells[81][2];   // [cellule 0..80][0=IA, 1=PLAYER]

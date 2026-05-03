@@ -79,7 +79,7 @@ private:
         GameMove bestMove;
     };
 
-    static const int TT_SIZE_LOG2 = 20;             // 2^20 = ~1M entrees
+    static const int TT_SIZE_LOG2 = 18;             // 2^20 = ~1M entrees
     static const int TT_SIZE      = 1 << TT_SIZE_LOG2;
     static const uint64_t TT_MASK = (uint64_t)TT_SIZE - 1;
 

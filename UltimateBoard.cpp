@@ -88,7 +88,7 @@ void UltimateBoard::playMove(GameMove m, Winner player) {
     int newTargetIdx = (targetSubRow == -1) ? 9 : (targetSubRow * 3 + targetSubCol);
     zobristHash ^= zTarget[newTargetIdx];
 
-    updateOverallWinner();
+    updateOverallWinner(sR, sC);
 }
 
 void UltimateBoard::undoMove() {
@@ -111,12 +111,43 @@ void UltimateBoard::undoMove() {
 
 int UltimateBoard::fillLegalMoves(GameMove out[81]) const {
     int n = 0;
-    for (int r = 0; r < 9; ++r) {
-        for (int c = 0; c < 9; ++c) {
-            GameMove m{r, c};
-            if (isValidMove(m)) out[n++] = m;
+
+    if (targetSubRow == -1) {
+        // Choix libre : on parcourt toutes les sous-grilles non finies
+        for (int sR = 0; sR < 3; ++sR) {
+            for (int sC = 0; sC < 3; ++sC) {
+                if (subBoards[sR][sC].isFinished()) continue;
+                int rowBase = sR * 3;
+                int colBase = sC * 3;
+                for (int lR = 0; lR < 3; ++lR) {
+                    for (int lC = 0; lC < 3; ++lC) {
+                        if (subBoards[sR][sC].getCell(lR, lC) == NO_WINNER) {
+                            out[n].row = rowBase + lR;
+                            out[n].col = colBase + lC;
+                            ++n;
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        // Sous-grille forcee : on n'examine que ses 9 cellules.
+        // C'est le cas le plus frequent en UTTT, et on saute 72 cellules.
+        int sR = targetSubRow;
+        int sC = targetSubCol;
+        int rowBase = sR * 3;
+        int colBase = sC * 3;
+        for (int lR = 0; lR < 3; ++lR) {
+            for (int lC = 0; lC < 3; ++lC) {
+                if (subBoards[sR][sC].getCell(lR, lC) == NO_WINNER) {
+                    out[n].row = rowBase + lR;
+                    out[n].col = colBase + lC;
+                    ++n;
+                }
+            }
         }
     }
+
     return n;
 }
 
@@ -132,32 +163,48 @@ std::vector<GameMove> UltimateBoard::getLegalMoves() const {
     return moves;
 }
 
-void UltimateBoard::updateOverallWinner() {
-    Winner w[3][3];
-    for (int i = 0; i < 3; ++i)
-        for (int j = 0; j < 3; ++j)
-            w[i][j] = subBoards[i][j].getWinner();
+void UltimateBoard::updateOverallWinner(int sR, int sC) {
+    // Apres playMove, seule subBoards[sR][sC] a pu changer d'etat.
+    // Si elle n'a pas de gagnant, aucune ligne globale ne peut s'etre completee.
+    Winner who = subBoards[sR][sC].getWinner();
+    if (who == NO_WINNER) return;
 
-    for (int i = 0; i < 3; ++i) {
-        if (w[i][0] != NO_WINNER && w[i][0] == w[i][1] && w[i][1] == w[i][2]) {
-            overallWinner = w[i][0];
-            return;
-        }
-        if (w[0][i] != NO_WINNER && w[0][i] == w[1][i] && w[1][i] == w[2][i]) {
-            overallWinner = w[0][i];
-            return;
-        }
-    }
-    if (w[0][0] != NO_WINNER && w[0][0] == w[1][1] && w[1][1] == w[2][2]) {
-        overallWinner = w[0][0];
+    // On ne verifie QUE les lignes qui passent par (sR, sC) :
+    // - sa rangee (toujours)
+    // - sa colonne (toujours)
+    // - la diagonale principale (si sR == sC)
+    // - l'anti-diagonale (si sR + sC == 2)
+
+    // Rangee sR
+    if (subBoards[sR][0].getWinner() == who &&
+        subBoards[sR][1].getWinner() == who &&
+        subBoards[sR][2].getWinner() == who) {
+        overallWinner = who;
         return;
     }
-    if (w[0][2] != NO_WINNER && w[0][2] == w[1][1] && w[1][1] == w[2][0]) {
-        overallWinner = w[0][2];
+    // Colonne sC
+    if (subBoards[0][sC].getWinner() == who &&
+        subBoards[1][sC].getWinner() == who &&
+        subBoards[2][sC].getWinner() == who) {
+        overallWinner = who;
         return;
     }
-
-    overallWinner = NO_WINNER;
+    // Diagonale principale
+    if (sR == sC &&
+        subBoards[0][0].getWinner() == who &&
+        subBoards[1][1].getWinner() == who &&
+        subBoards[2][2].getWinner() == who) {
+        overallWinner = who;
+        return;
+    }
+    // Anti-diagonale
+    if (sR + sC == 2 &&
+        subBoards[0][2].getWinner() == who &&
+        subBoards[1][1].getWinner() == who &&
+        subBoards[2][0].getWinner() == who) {
+        overallWinner = who;
+        return;
+    }
 }
 
 int UltimateBoard::countSubBoardsWon(Winner w) const {
