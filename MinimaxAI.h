@@ -3,8 +3,10 @@
 
 #include <cstdint>
 #include <chrono>
+#include <string>
 #include <vector>
 #include "UltimateBoard.h"
+#include "OpeningBook.h"
 #include "main.h"
 
 class MinimaxAI {
@@ -29,6 +31,18 @@ public:
     void setDepth(int d) { maxDepth = d; }
     void setTimeBudgetMs(int ms) { budgetMs = ms; }
     void clearTT();
+
+    // Active l'opening book : charge le fichier (s'il existe), et configure
+    // une recherche plus profonde + plus de temps sur les premiers plies.
+    // bookMaxPly : on n'enregistre que les positions a moins de N coups joues.
+    // extraDepth/extraBudgetMs : ajoutes a maxDepth/budgetMs sur les positions early-game.
+    void enableBook(const std::string& filename,
+                    int bookMaxPly = 12,
+                    int extraDepth = 4,
+                    int extraBudgetMs = 5000);
+
+    // Sauvegarde le livre. A appeler entre les parties pour ne rien perdre.
+    void saveBook() const;
 
 private:
     Winner myColor;
@@ -71,6 +85,14 @@ private:
     std::vector<TTEntry> tt;
 
     SearchInfo lastInfo;
+
+    // -------- Opening Book --------
+    OpeningBook  book;
+    bool         bookEnabled;
+    std::string  bookFilename;
+    int          bookMaxPly;       // jusqu'a quel coup on alimente le livre
+    int          bookExtraDepth;   // bonus de profondeur en early game
+    int          bookExtraBudgetMs;// bonus de temps en early game
 
     void ttStore(uint64_t hash, int score, int depth, TTBound bound,
                  GameMove bestMove, int plyFromRoot);

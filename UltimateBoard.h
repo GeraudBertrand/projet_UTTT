@@ -54,6 +54,9 @@ public:
     // si aucun joueur n'a fait 3-en-ligne au niveau global.
     int countSubBoardsWon(Winner w) const;
 
+    // Nombre de coups deja joues (= taille de la pile d'undo)
+    int getMoveCount() const { return historySize; }
+
 private:
     void updateOverallWinner();
 

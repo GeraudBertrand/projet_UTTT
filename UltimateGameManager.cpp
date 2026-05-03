@@ -7,9 +7,17 @@
 
 UltimateGameManager::UltimateGameManager()
     : myColor(PLAYER), opponentColor(IA),
-      ai(PLAYER, IA, 10, 500),
+      ai(PLAYER, IA, 15, 10000),
       gameNumber(0), moveIndex(0) {
     openLogFile();
+
+    // Active le livre d'ouvertures :
+    //  - alimente jusqu'au 12e coup joue (= ~6 plies de chaque cote)
+    //  - profondeur supplementaire +4 sur ces positions (depth 14 au lieu de 10)
+    //  - budget supplementaire +5000 ms pour avoir le temps d'aller chercher
+    // Premiere partie : lente sur les premiers coups (deep think + ecriture).
+    // Suivantes : positions deja en cache => reponses instantanees.
+    ai.enableBook("opening_book.txt", 12, 4, 5000);
 }
 
 UltimateGameManager::~UltimateGameManager() {
@@ -122,6 +130,8 @@ void UltimateGameManager::playTournament(int nbGames, Level level, Mode mode, bo
 
         // Fin de partie
         writeGameEndRow(game.getWinner());
+        // Sauve le livre apres chaque partie pour ne rien perdre en cas de crash
+        ai.saveBook();
     }
 }
 
