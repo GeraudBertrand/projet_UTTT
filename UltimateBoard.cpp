@@ -151,59 +151,25 @@ int UltimateBoard::fillLegalMoves(GameMove out[81]) const {
     return n;
 }
 
-std::vector<GameMove> UltimateBoard::getLegalMoves() const {
-    std::vector<GameMove> moves;
-    moves.reserve(20);
-    for (int r = 0; r < 9; ++r) {
-        for (int c = 0; c < 9; ++c) {
-            GameMove m{r, c};
-            if (isValidMove(m)) moves.push_back(m);
-        }
-    }
-    return moves;
-}
-
 void UltimateBoard::updateOverallWinner(int sR, int sC) {
     // Apres playMove, seule subBoards[sR][sC] a pu changer d'etat.
     // Si elle n'a pas de gagnant, aucune ligne globale ne peut s'etre completee.
     Winner who = subBoards[sR][sC].getWinner();
     if (who == NO_WINNER) return;
 
-    // On ne verifie QUE les lignes qui passent par (sR, sC) :
-    // - sa rangee (toujours)
-    // - sa colonne (toujours)
-    // - la diagonale principale (si sR == sC)
-    // - l'anti-diagonale (si sR + sC == 2)
-
-    // Rangee sR
-    if (subBoards[sR][0].getWinner() == who &&
-        subBoards[sR][1].getWinner() == who &&
-        subBoards[sR][2].getWinner() == who) {
-        overallWinner = who;
-        return;
-    }
-    // Colonne sC
-    if (subBoards[0][sC].getWinner() == who &&
-        subBoards[1][sC].getWinner() == who &&
-        subBoards[2][sC].getWinner() == who) {
-        overallWinner = who;
-        return;
-    }
-    // Diagonale principale
-    if (sR == sC &&
-        subBoards[0][0].getWinner() == who &&
-        subBoards[1][1].getWinner() == who &&
-        subBoards[2][2].getWinner() == who) {
-        overallWinner = who;
-        return;
-    }
-    // Anti-diagonale
-    if (sR + sC == 2 &&
-        subBoards[0][2].getWinner() == who &&
-        subBoards[1][1].getWinner() == who &&
-        subBoards[2][0].getWinner() == who) {
-        overallWinner = who;
-        return;
+    // On utilise la meme table que SubBoard : LINE_PAIRS[sR][sC] donne les
+    // 2 AUTRES cases de chaque ligne qui passe par (sR, sC).
+    for (int i = 0; i < 4; ++i) {
+        int r1 = SubBoard::LINE_PAIRS[sR][sC][i][0];
+        if (r1 < 0) break;
+        int c1 = SubBoard::LINE_PAIRS[sR][sC][i][1];
+        int r2 = SubBoard::LINE_PAIRS[sR][sC][i][2];
+        int c2 = SubBoard::LINE_PAIRS[sR][sC][i][3];
+        if (subBoards[r1][c1].getWinner() == who &&
+            subBoards[r2][c2].getWinner() == who) {
+            overallWinner = who;
+            return;
+        }
     }
 }
 

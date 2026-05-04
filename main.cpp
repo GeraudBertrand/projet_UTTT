@@ -9,7 +9,7 @@ int main() {
 
     // On lance le tournoi !
     // Paramètres : 10 parties, Niveau EASY_1, Mode DEBUG, On ne force pas le 1er tour, Pseudo.
-    manager.playTournament(30, Level::HARD_2, Mode::ARENA, false, "Geraud");
+    manager.playTournament(30, Level::MEDIUM_2, Mode::DEBUG, false, "Geraud");
 
     return 0;
 }

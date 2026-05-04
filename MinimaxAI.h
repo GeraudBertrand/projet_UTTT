@@ -121,8 +121,8 @@ private:
     int scoreMove(const UltimateBoard& board,
                   const GameMove& m,
                   Winner player) const;
-    bool wouldCompleteLine(const SubBoard& sb, int lR, int lC, Winner player) const;
-    bool subBoardHasOneMoveWin(const SubBoard& sb, Winner player) const;
+    // Note : wouldCompleteLine et hasOneMoveWin sont maintenant des methodes
+    // de SubBoard. On les appelle via sb.wouldCompleteLine(...) etc.
 };
 
 #endif

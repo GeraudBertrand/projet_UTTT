@@ -2,7 +2,6 @@
 #define ULTIMATEBOARD_H
 
 #include <cstdint>
-#include <vector>
 #include "SubBoard.h"
 
 class UltimateBoard {
@@ -35,12 +34,9 @@ public:
     void playMove(GameMove m, Winner player);
     void undoMove();
 
-    // API rapide pour le hot path minimax (zero allocation)
-    // Retourne le nombre de coups, ecrits dans out[0..n-1]
+    // Remplit `out` avec les coups legaux ; retourne leur nombre.
+    // Aucune allocation, parcourt directement la sous-grille forcee si target != -1.
     int fillLegalMoves(GameMove out[81]) const;
-
-    // API legacy (allocation) - conservee pour code externe
-    std::vector<GameMove> getLegalMoves() const;
 
     bool isTerminal() const;
 

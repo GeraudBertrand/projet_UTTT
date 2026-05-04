@@ -72,7 +72,7 @@ GameMove MinimaxAI::findBestMove(UltimateBoard& board) {
     for (int i = 0; i < rootN; ++i) {
         int sR = moves[i].row / 3, sC = moves[i].col / 3;
         int lR = moves[i].row % 3, lC = moves[i].col % 3;
-        if (wouldCompleteLine(board.getSubBoard(sR, sC), lR, lC, myColor)) {
+        if (board.getSubBoard(sR, sC).wouldCompleteLine(lR, lC, myColor)) {
             hadLocalWin = true;
             break;
         }
@@ -86,7 +86,7 @@ GameMove MinimaxAI::findBestMove(UltimateBoard& board) {
             // Took-local-win pour le coup du livre
             int sR = bookMove.row / 3, sC = bookMove.col / 3;
             int lR = bookMove.row % 3, lC = bookMove.col % 3;
-            bool tookWin = wouldCompleteLine(board.getSubBoard(sR, sC), lR, lC, myColor);
+            bool tookWin = board.getSubBoard(sR, sC).wouldCompleteLine(lR, lC, myColor);
 
             lastInfo.bestMove        = bookMove;
             lastInfo.depthReached    = -1; // sentinelle "from book"
@@ -191,7 +191,7 @@ GameMove MinimaxAI::findBestMove(UltimateBoard& board) {
     {
         int sR = bestMove.row / 3, sC = bestMove.col / 3;
         int lR = bestMove.row % 3, lC = bestMove.col % 3;
-        bool tookWin = wouldCompleteLine(board.getSubBoard(sR, sC), lR, lC, myColor);
+        bool tookWin = board.getSubBoard(sR, sC).wouldCompleteLine(lR, lC, myColor);
         lastInfo.bestMove        = bestMove;
         lastInfo.depthReached    = reachedDepth;
         lastInfo.score           = bestScore;
@@ -432,12 +432,12 @@ int MinimaxAI::scoreMove(const UltimateBoard& board,
     int score = 0;
     const SubBoard& localSb = board.getSubBoard(sR, sC);
 
-    bool wins = wouldCompleteLine(localSb, lR, lC, player);
+    bool wins = localSb.wouldCompleteLine(lR, lC, player);
     if (wins) {
         score += 10000 + 200 * globalPos[sR][sC];
     }
 
-    if (wouldCompleteLine(localSb, lR, lC, opp)) {
+    if (localSb.wouldCompleteLine(lR, lC, opp)) {
         score += 5000;
     }
 
@@ -448,9 +448,9 @@ int MinimaxAI::scoreMove(const UltimateBoard& board,
         const SubBoard& nextSb = board.getSubBoard(lR, lC);
         if (nextSb.isFinished()) {
             score -= 4000;
-        } else if (subBoardHasOneMoveWin(nextSb, opp)) {
+        } else if (nextSb.hasOneMoveWin(opp)) {
             score -= 2500;
-        } else if (subBoardHasOneMoveWin(nextSb, player)) {
+        } else if (nextSb.hasOneMoveWin(player)) {
             score += 800;
         }
     }
@@ -462,56 +462,6 @@ int MinimaxAI::scoreMove(const UltimateBoard& board,
     score += 5 * globalPos[sR][sC];
 
     return score;
-}
-
-bool MinimaxAI::wouldCompleteLine(const SubBoard& sb, int lR, int lC, Winner player) const {
-    if (sb.getCell(lR, lC) != NO_WINNER) return false;
-
-    bool line = true;
-    for (int j = 0; j < 3; ++j) {
-        if (j == lC) continue;
-        if (sb.getCell(lR, j) != player) { line = false; break; }
-    }
-    if (line) return true;
-
-    line = true;
-    for (int i = 0; i < 3; ++i) {
-        if (i == lR) continue;
-        if (sb.getCell(i, lC) != player) { line = false; break; }
-    }
-    if (line) return true;
-
-    if (lR == lC) {
-        line = true;
-        for (int i = 0; i < 3; ++i) {
-            if (i == lR) continue;
-            if (sb.getCell(i, i) != player) { line = false; break; }
-        }
-        if (line) return true;
-    }
-
-    if (lR + lC == 2) {
-        line = true;
-        for (int i = 0; i < 3; ++i) {
-            int j = 2 - i;
-            if (i == lR) continue;
-            if (sb.getCell(i, j) != player) { line = false; break; }
-        }
-        if (line) return true;
-    }
-
-    return false;
-}
-
-bool MinimaxAI::subBoardHasOneMoveWin(const SubBoard& sb, Winner player) const {
-    if (sb.isFinished()) return false;
-    for (int r = 0; r < 3; ++r) {
-        for (int c = 0; c < 3; ++c) {
-            if (sb.getCell(r, c) != NO_WINNER) continue;
-            if (wouldCompleteLine(sb, r, c, player)) return true;
-        }
-    }
-    return false;
 }
 
 // ============================================================
@@ -588,10 +538,10 @@ int MinimaxAI::evaluate(const UltimateBoard& board, bool meToMove) const {
         if (!target.isFinished()) {
             Winner self  = meToMove ? myColor : opponentColor;
             Winner other = meToMove ? opponentColor : myColor;
-            if (subBoardHasOneMoveWin(target, self)) {
+            if (target.hasOneMoveWin(self)) {
                 score += sign * 90;   // (C re-tune) 120 -> 90
             }
-            if (subBoardHasOneMoveWin(target, other)) {
+            if (target.hasOneMoveWin(other)) {
                 score -= sign * 50;   // (C re-tune) 70 -> 50
             }
         }
@@ -604,26 +554,14 @@ int MinimaxAI::countOpenLines(const Winner sw[3][3], Winner who) const {
     // Une ligne est "ouverte" pour `who` si aucune de ses 3 cases ne contient
     // d'adversaire (Winner != who && != NO_WINNER). Les sous-grilles nulles
     // (encodees IA_AND_PLAYER en amont) bloquent donc bien les deux joueurs.
-
-    // On enumere les 8 lignes (3 rangees + 3 colonnes + 2 diagonales).
-    // Tableau de 8 lignes x 3 cellules.
-    Winner lines[8][3] = {
-        { sw[0][0], sw[0][1], sw[0][2] },
-        { sw[1][0], sw[1][1], sw[1][2] },
-        { sw[2][0], sw[2][1], sw[2][2] },
-        { sw[0][0], sw[1][0], sw[2][0] },
-        { sw[0][1], sw[1][1], sw[2][1] },
-        { sw[0][2], sw[1][2], sw[2][2] },
-        { sw[0][0], sw[1][1], sw[2][2] },
-        { sw[0][2], sw[1][1], sw[2][0] },
-    };
-
+    // On utilise la table SubBoard::LINES (precalculee une fois pour toutes).
     int count = 0;
     for (int i = 0; i < 8; ++i) {
         bool open = true;
-        for (int j = 0; j < 3; ++j) {
-            Winner x = lines[i][j];
-            // Cellule "OK" si elle est a `who` ou vide. Sinon, ligne bloquee.
+        for (int k = 0; k < 3; ++k) {
+            int r = SubBoard::LINES[i][k][0];
+            int c = SubBoard::LINES[i][k][1];
+            Winner x = sw[r][c];
             if (x != who && x != NO_WINNER) { open = false; break; }
         }
         if (open) ++count;
@@ -656,25 +594,15 @@ int MinimaxAI::evaluateSubBoard(const SubBoard& sb, Winner who) const {
 int MinimaxAI::countTwoInLine(const Winner cells[3][3], Winner who) const {
     // Une "menace" 2-en-ligne = exactement 2 cases a `who`, 1 case vide,
     // ET aucune case "bloquante" (adversaire ou case nulle marquee IA_AND_PLAYER).
-
-    // Meme structure que countOpenLines : on enumere les 8 lignes.
-    Winner lines[8][3] = {
-        { cells[0][0], cells[0][1], cells[0][2] },
-        { cells[1][0], cells[1][1], cells[1][2] },
-        { cells[2][0], cells[2][1], cells[2][2] },
-        { cells[0][0], cells[1][0], cells[2][0] },
-        { cells[0][1], cells[1][1], cells[2][1] },
-        { cells[0][2], cells[1][2], cells[2][2] },
-        { cells[0][0], cells[1][1], cells[2][2] },
-        { cells[0][2], cells[1][1], cells[2][0] },
-    };
-
+    // On utilise la table SubBoard::LINES (precalculee une fois pour toutes).
     int total = 0;
     for (int i = 0; i < 8; ++i) {
         int mine = 0;
         bool blocked = false;
-        for (int j = 0; j < 3; ++j) {
-            Winner x = lines[i][j];
+        for (int k = 0; k < 3; ++k) {
+            int r = SubBoard::LINES[i][k][0];
+            int c = SubBoard::LINES[i][k][1];
+            Winner x = cells[r][c];
             if (x == who)            mine++;
             else if (x != NO_WINNER) blocked = true; // adversaire ou nulle
         }

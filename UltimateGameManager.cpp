@@ -5,7 +5,7 @@
 
 UltimateGameManager::UltimateGameManager()
     : myColor(PLAYER), opponentColor(IA),
-      ai(PLAYER, IA, 10, 10000),
+      ai(PLAYER, IA, 8, 7500),
       gameNumber(0), moveIndex(0) {
     openLogFile();
 

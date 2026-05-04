@@ -1,5 +1,5 @@
 # depslib dependency file v1.0
-1777843470 source:d:\project\projet_uttt\main.cpp
+1777904987 source:d:\project\projet_uttt\main.cpp
 	<iostream>
 	"main.h"
 	<cstdlib>
@@ -8,13 +8,13 @@
 1776766842 d:\project\projet_uttt\main.h
 	<string>
 
-1777843340 source:d:\project\projet_uttt\ultimateboard.cpp
+1777904859 source:d:\project\projet_uttt\ultimateboard.cpp
 	"UltimateBoard.h"
 
-1777546602 source:d:\project\projet_uttt\subboard.cpp
+1777902293 source:d:\project\projet_uttt\subboard.cpp
 	"SubBoard.h"
 
-1777546596 d:\project\projet_uttt\subboard.h
+1777902143 d:\project\projet_uttt\subboard.h
 	"main.h"
 
 1777812039 d:\project\projet_uttt\ultimategamemanager.h
@@ -24,12 +24,11 @@
 	<fstream>
 	<string>
 
-1777843302 d:\project\projet_uttt\ultimateboard.h
+1777904874 d:\project\projet_uttt\ultimateboard.h
 	<cstdint>
-	<vector>
 	"SubBoard.h"
 
-1777843636 d:\project\projet_uttt\minimaxai.h
+1777904708 d:\project\projet_uttt\minimaxai.h
 	<cstdint>
 	<ctime>
 	<string>
@@ -38,14 +37,14 @@
 	"OpeningBook.h"
 	"main.h"
 
-1777841305 source:d:\project\projet_uttt\minimaxai.cpp
+1777904812 source:d:\project\projet_uttt\minimaxai.cpp
 	"MinimaxAI.h"
 	<algorithm>
 	<climits>
 	<ctime>
 	<iostream>
 
-1777843609 source:d:\project\projet_uttt\ultimategamemanager.cpp
+1777905028 source:d:\project\projet_uttt\ultimategamemanager.cpp
 	"UltimateGameManager.h"
 	<ctime>
 	<iostream>
