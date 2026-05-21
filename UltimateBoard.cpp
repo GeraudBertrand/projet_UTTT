@@ -1,13 +1,19 @@
 #include "UltimateBoard.h"
 
+// =============================================================================
+//  Tables Zobrist (statiques) et leur initialisation
+// =============================================================================
+
 uint64_t UltimateBoard::zCells[81][2];
 uint64_t UltimateBoard::zTarget[10];
 uint64_t UltimateBoard::zSide;
-bool UltimateBoard::zInitialized = false;
+bool     UltimateBoard::zInitialized = false;
 
 // xorshift64 : generateur pseudo-aleatoire ultra-simple.
-// Alternative a std::mt19937_64 qui evite d'inclure <random>.
-// Le seed est fixe pour avoir un hash Zobrist deterministe entre executions.
+// On ne veut PAS de qualite cryptographique, juste une distribution decente
+// pour faire des hash Zobrist. Avantage par rapport a std::mt19937_64 :
+// pas besoin d'inclure <random> (4 lignes au lieu d'une bibliotheque).
+// Seed fixe -> les hashes Zobrist sont deterministes entre executions.
 static uint64_t xs_state = 0xC0FFEE12345ULL;
 static uint64_t xorshift64() {
     xs_state ^= xs_state << 13;
@@ -27,14 +33,27 @@ void UltimateBoard::initZobrist() {
     zInitialized = true;
 }
 
+// =============================================================================
+//  Cycle de vie
+// =============================================================================
+
 UltimateBoard::UltimateBoard()
     : targetSubRow(-1), targetSubCol(-1), overallWinner(NO_WINNER),
       historySize(0), zobristHash(0) {
     if (!zInitialized) initZobrist();
-    // Etat initial : choix libre (index 9), aucune cellule, mon trait (zSide non XOR)
+    // Etat initial du hash : on encode la cible "choix libre" (index 9).
+    // Le bit de side-to-move (zSide) est implicitement a 0.
     zobristHash = zTarget[9];
 }
 
+// =============================================================================
+//  Regles de jeu
+// =============================================================================
+
+// Verifie les 3 regles UTTT :
+//   1) la case est dans le plateau
+//   2) la case est vide et sa sous-grille n'est pas terminee
+//   3) elle est dans la sous-grille forcee (sauf si target == -1 = choix libre)
 bool UltimateBoard::isValidMove(GameMove m) const {
     if (m.row < 0 || m.row > 8 || m.col < 0 || m.col > 8) return false;
 
@@ -50,32 +69,40 @@ bool UltimateBoard::isValidMove(GameMove m) const {
     return true;
 }
 
+// Joue un coup et met a jour :
+//   - la sous-grille concernee
+//   - la cible imposee a l'adversaire (= la position locale du coup joue)
+//   - le hash Zobrist (incrementalement)
+//   - le gagnant global
+// L'etat avant le coup est sauvegarde dans la pile pour pouvoir defaire.
 void UltimateBoard::playMove(GameMove m, Winner player) {
     int sR = m.row / 3;
     int sC = m.col / 3;
     int lR = m.row % 3;
     int lC = m.col % 3;
 
+    // 1) On sauvegarde tout ce qu'il faut pour annuler ce coup.
     UndoInfo& info = history[historySize++];
-    info.move = m;
-    info.prevTargetRow = targetSubRow;
-    info.prevTargetCol = targetSubCol;
+    info.move              = m;
+    info.prevTargetRow     = targetSubRow;
+    info.prevTargetCol     = targetSubCol;
     info.prevOverallWinner = overallWinner;
     info.prevSubBoardWinner = subBoards[sR][sC].getWinner();
-    info.prevHash = zobristHash;
+    info.prevHash          = zobristHash;
 
-    // Defaire l'ancien target dans le hash
+    // 2) Hash : on retire l'ancienne cible.
     int oldTargetIdx = (targetSubRow == -1) ? 9 : (targetSubRow * 3 + targetSubCol);
     zobristHash ^= zTarget[oldTargetIdx];
 
-    // Jouer + mettre a jour la cellule dans le hash
+    // 3) On joue dans la sous-grille + on ajoute la cellule au hash.
     subBoards[sR][sC].playMove(lR, lC, player);
-    int cellIdx = m.row * 9 + m.col;
+    int cellIdx   = m.row * 9 + m.col;
     int playerIdx = (player == IA) ? 0 : 1;
     zobristHash ^= zCells[cellIdx][playerIdx];
-    zobristHash ^= zSide;
+    zobristHash ^= zSide; // le trait change
 
-    // Determiner le nouveau target
+    // 4) Nouvelle cible imposee : la position locale du coup joue.
+    //    Sauf si cette sous-grille est deja finie -> choix libre.
     if (subBoards[lR][lC].isFinished()) {
         targetSubRow = -1;
         targetSubCol = -1;
@@ -84,16 +111,18 @@ void UltimateBoard::playMove(GameMove m, Winner player) {
         targetSubCol = lC;
     }
 
-    // Encoder le nouveau target dans le hash
+    // 5) Hash : on ajoute la nouvelle cible.
     int newTargetIdx = (targetSubRow == -1) ? 9 : (targetSubRow * 3 + targetSubCol);
     zobristHash ^= zTarget[newTargetIdx];
 
+    // 6) Verifier si on vient de remporter le plateau global.
     updateOverallWinner(sR, sC);
 }
 
+// Restaure exactement l'etat sauvegarde au playMove correspondant.
+// Note : on restore le hash directement (plus simple que de re-XOR).
 void UltimateBoard::undoMove() {
     if (historySize == 0) return;
-
     UndoInfo& info = history[--historySize];
 
     int sR = info.move.row / 3;
@@ -103,17 +132,24 @@ void UltimateBoard::undoMove() {
 
     subBoards[sR][sC].undoMove(lR, lC);
 
-    targetSubRow = info.prevTargetRow;
-    targetSubCol = info.prevTargetCol;
+    targetSubRow  = info.prevTargetRow;
+    targetSubCol  = info.prevTargetCol;
     overallWinner = info.prevOverallWinner;
-    zobristHash = info.prevHash;
+    zobristHash   = info.prevHash;
 }
 
+// =============================================================================
+//  Generation des coups legaux
+// =============================================================================
+
+// Optimisation cle : si target != -1, on ne parcourt QUE les 9 cases de la
+// sous-grille forcee. Sinon (choix libre), on parcourt les sous-grilles
+// encore ouvertes. On evite ainsi le "for r=0..8, c=0..8" + isValidMove().
 int UltimateBoard::fillLegalMoves(GameMove out[81]) const {
     int n = 0;
 
     if (targetSubRow == -1) {
-        // Choix libre : on parcourt toutes les sous-grilles non finies
+        // Choix libre : parcourir toutes les sous-grilles non terminees.
         for (int sR = 0; sR < 3; ++sR) {
             for (int sC = 0; sC < 3; ++sC) {
                 if (subBoards[sR][sC].isFinished()) continue;
@@ -132,7 +168,7 @@ int UltimateBoard::fillLegalMoves(GameMove out[81]) const {
         }
     } else {
         // Sous-grille forcee : on n'examine que ses 9 cellules.
-        // C'est le cas le plus frequent en UTTT, et on saute 72 cellules.
+        // C'est le cas le plus frequent en UTTT (on saute 72 cases).
         int sR = targetSubRow;
         int sC = targetSubCol;
         int rowBase = sR * 3;
@@ -151,14 +187,18 @@ int UltimateBoard::fillLegalMoves(GameMove out[81]) const {
     return n;
 }
 
-void UltimateBoard::updateOverallWinner(int sR, int sC) {
-    // Apres playMove, seule subBoards[sR][sC] a pu changer d'etat.
-    // Si elle n'a pas de gagnant, aucune ligne globale ne peut s'etre completee.
-    Winner who = subBoards[sR][sC].getWinner();
-    if (who == NO_WINNER) return;
+// =============================================================================
+//  Mise a jour du gagnant global
+// =============================================================================
 
-    // On utilise la meme table que SubBoard : LINE_PAIRS[sR][sC] donne les
-    // 2 AUTRES cases de chaque ligne qui passe par (sR, sC).
+// Apres playMove, seule subBoards[sR][sC] a pu changer d'etat.
+// Donc seules 2 a 4 lignes globales (celles qui passent par (sR, sC)) peuvent
+// avoir ete completees. On les enumere via SubBoard::LINE_PAIRS, partage avec
+// la detection de victoire interne aux sous-grilles.
+void UltimateBoard::updateOverallWinner(int sR, int sC) {
+    Winner who = subBoards[sR][sC].getWinner();
+    if (who == NO_WINNER) return; // pas de nouveau gagnant local, rien a faire
+
     for (int i = 0; i < 4; ++i) {
         int r1 = SubBoard::LINE_PAIRS[sR][sC][i][0];
         if (r1 < 0) break;
@@ -173,6 +213,10 @@ void UltimateBoard::updateOverallWinner(int sR, int sC) {
     }
 }
 
+// =============================================================================
+//  Queries d'etat
+// =============================================================================
+
 int UltimateBoard::countSubBoardsWon(Winner w) const {
     int n = 0;
     for (int i = 0; i < 3; ++i)
@@ -181,6 +225,8 @@ int UltimateBoard::countSubBoardsWon(Winner w) const {
     return n;
 }
 
+// Le plateau est termine soit avec un gagnant global, soit quand toutes les
+// sous-grilles sont elles-memes terminees (gagnees ou pleines).
 bool UltimateBoard::isTerminal() const {
     if (overallWinner != NO_WINNER) return true;
     for (int i = 0; i < 3; ++i)
