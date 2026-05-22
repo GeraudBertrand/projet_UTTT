@@ -9,7 +9,7 @@
 UltimateGameManager::UltimateGameManager()
     : myColor(PLAYER), opponentColor(IA),
       // maxDepth = plafond ; la limite reelle vient du budget de temps.
-      ai(PLAYER, IA, 8, 7500),
+      ai(PLAYER, IA, 14, 7500),
       gameNumber(0), moveIndex(0) {
     openLogFile();
 
