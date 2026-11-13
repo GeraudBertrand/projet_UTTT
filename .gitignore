@@ -64,3 +64,8 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+# Code::Blocks build output
+obj/
+
+# Logs generes a chaque execution (les anciens sont ranges dans logs/)
+/ai_log_*.csv

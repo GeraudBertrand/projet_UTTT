@@ -24,7 +24,17 @@ UltimateBoard.{h,cpp}        le plateau complet + regles UTTT + hash Zobrist
 OpeningBook.{h,cpp}          livre d'ouvertures (positions deja analysees)
 MinimaxAI.{h,cpp}            l'IA
 UltimateGameManager.{h,cpp}  pilote le tournoi et log les parties
+
+libUTTTLib.a + *.dll         moteur du prof + Allegro (necessaires au build)
+images/                      sprites du mode graphique
+opening_book.txt             livre d'ouvertures (genere par l'IA)
+bin/Debug/UTTT_Template.exe  dernier binaire compile
+docs/                        diagramme de classes (Mermaid + PNG)
+logs/                        anciens logs CSV des tournois de test
 ```
+
+Le diagramme de classes est dans [docs/class_diagram.md](docs/class_diagram.md)
+(rendu par GitHub) et en image dans [docs/class_diagram.png](docs/class_diagram.png).
 
 Chaque classe gère son truc :
 
@@ -88,7 +98,8 @@ Le `MinimaxAI` enchaîne plusieurs trucs :
 
 ## Le log CSV
 
-À chaque exécution un fichier `ai_log_YYYYMMDD_HHMMSS.csv` est généré.
+À chaque exécution un fichier `ai_log_YYYYMMDD_HHMMSS.csv` est généré à la
+racine (ignoré par git ; les logs utiles sont rangés à la main dans `logs/`).
 Une ligne par évènement (`game_start`, `opp_move`, `ai_move`, `game_end`).
 
 Colonnes :

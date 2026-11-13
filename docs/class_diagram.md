@@ -1,3 +1,4 @@
+```mermaid
 classDiagram
     direction TOP_BOTTOM
 
@@ -181,3 +182,5 @@ classDiagram
     UndoInfo "1" --> "1" GameMove : move
     TTEntry "1" --> "1" GameMove : bestMove
     SearchInfo "1" --> "1" GameMove : bestMove
+
+```
