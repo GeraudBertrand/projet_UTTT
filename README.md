@@ -73,7 +73,7 @@ manager.playTournament(
 Et les réglages de l'IA dans `UltimateGameManager.cpp` :
 
 ```cpp
-ai(PLAYER, IA, 14, 7500);                   // depth max 14, budget 7500ms
+ai(PLAYER, IA, 5, 7500);                    // depth max 5, budget 7500ms
 ai.enableBook("opening_book.txt", 12, 4, 5000);
 ```
 

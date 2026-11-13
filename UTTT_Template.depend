@@ -8,27 +8,27 @@
 1776766842 d:\project\projet_uttt\main.h
 	<string>
 
-1777904859 source:d:\project\projet_uttt\ultimateboard.cpp
+1779797558 source:d:\project\projet_uttt\ultimateboard.cpp
 	"UltimateBoard.h"
 
-1777902293 source:d:\project\projet_uttt\subboard.cpp
+1779797558 source:d:\project\projet_uttt\subboard.cpp
 	"SubBoard.h"
 
-1777902143 d:\project\projet_uttt\subboard.h
+1779797558 d:\project\projet_uttt\subboard.h
 	"main.h"
 
-1777812039 d:\project\projet_uttt\ultimategamemanager.h
+1779797558 d:\project\projet_uttt\ultimategamemanager.h
 	"UltimateBoard.h"
 	"MinimaxAI.h"
 	"main.h"
 	<fstream>
 	<string>
 
-1777904874 d:\project\projet_uttt\ultimateboard.h
+1779797558 d:\project\projet_uttt\ultimateboard.h
 	<cstdint>
 	"SubBoard.h"
 
-1777904708 d:\project\projet_uttt\minimaxai.h
+1779797558 d:\project\projet_uttt\minimaxai.h
 	<cstdint>
 	<ctime>
 	<string>
@@ -37,26 +37,25 @@
 	"OpeningBook.h"
 	"main.h"
 
-1777904812 source:d:\project\projet_uttt\minimaxai.cpp
+1779797558 source:d:\project\projet_uttt\minimaxai.cpp
 	"MinimaxAI.h"
 	<algorithm>
 	<climits>
 	<ctime>
 	<iostream>
 
-1777905028 source:d:\project\projet_uttt\ultimategamemanager.cpp
+1779797854 source:d:\project\projet_uttt\ultimategamemanager.cpp
 	"UltimateGameManager.h"
 	<ctime>
 	<iostream>
-	<vector>
 
-1777816715 d:\project\projet_uttt\openingbook.h
+1779797831 d:\project\projet_uttt\openingbook.h
 	"main.h"
 	<cstdint>
 	<string>
 	<unordered_map>
 
-1777841454 source:d:\project\projet_uttt\openingbook.cpp
+1779797558 source:d:\project\projet_uttt\openingbook.cpp
 	"OpeningBook.h"
 	<cstdio>
 	<fstream>
