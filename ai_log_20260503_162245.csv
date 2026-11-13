@@ -1,0 +1,4 @@
+event,game,move_idx,row,col,target_r_before,target_c_before,depth,score,elapsed_ms,legal_count,had_local_win,took_local_win,result
+game_start,1,0,,,,,,,,,,,
+ai_move,1,1,4,4,-1,-1,10,0,12508,81,0,0,
+opp_move,1,2,3,3,1,1,,,,,,,

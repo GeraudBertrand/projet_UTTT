@@ -1,5 +1,5 @@
 # depslib dependency file v1.0
-1777811395 source:d:\project\projet_uttt\main.cpp
+1777904987 source:d:\project\projet_uttt\main.cpp
 	<iostream>
 	"main.h"
 	<cstdlib>
@@ -8,14 +8,13 @@
 1776766842 d:\project\projet_uttt\main.h
 	<string>
 
-1777813087 source:d:\project\projet_uttt\ultimateboard.cpp
+1777904859 source:d:\project\projet_uttt\ultimateboard.cpp
 	"UltimateBoard.h"
-	<random>
 
-1777546602 source:d:\project\projet_uttt\subboard.cpp
+1777902293 source:d:\project\projet_uttt\subboard.cpp
 	"SubBoard.h"
 
-1777546596 d:\project\projet_uttt\subboard.h
+1777902143 d:\project\projet_uttt\subboard.h
 	"main.h"
 
 1777812039 d:\project\projet_uttt\ultimategamemanager.h
@@ -25,30 +24,41 @@
 	<fstream>
 	<string>
 
-1777813080 d:\project\projet_uttt\ultimateboard.h
+1777904874 d:\project\projet_uttt\ultimateboard.h
 	<cstdint>
-	<vector>
 	"SubBoard.h"
 
-1777813114 d:\project\projet_uttt\minimaxai.h
+1777904708 d:\project\projet_uttt\minimaxai.h
 	<cstdint>
-	<chrono>
+	<ctime>
+	<string>
 	<vector>
 	"UltimateBoard.h"
+	"OpeningBook.h"
 	"main.h"
 
-1777813148 source:d:\project\projet_uttt\minimaxai.cpp
+1777904812 source:d:\project\projet_uttt\minimaxai.cpp
 	"MinimaxAI.h"
 	<algorithm>
-	<limits>
-	<utility>
+	<climits>
+	<ctime>
 	<iostream>
 
-1777812075 source:d:\project\projet_uttt\ultimategamemanager.cpp
+1777905028 source:d:\project\projet_uttt\ultimategamemanager.cpp
 	"UltimateGameManager.h"
+	<ctime>
 	<iostream>
 	<vector>
-	<ctime>
-	<iomanip>
-	<sstream>
+
+1777816715 d:\project\projet_uttt\openingbook.h
+	"main.h"
+	<cstdint>
+	<string>
+	<unordered_map>
+
+1777841454 source:d:\project\projet_uttt\openingbook.cpp
+	"OpeningBook.h"
+	<cstdio>
+	<fstream>
+	<iostream>
 

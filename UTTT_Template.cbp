@@ -39,6 +39,8 @@
 		</Linker>
 		<Unit filename="MinimaxAI.cpp" />
 		<Unit filename="MinimaxAI.h" />
+		<Unit filename="OpeningBook.cpp" />
+		<Unit filename="OpeningBook.h" />
 		<Unit filename="UltimateBoard.cpp" />
 		<Unit filename="UltimateBoard.h" />
 		<Unit filename="UltimateGameManager.cpp" />

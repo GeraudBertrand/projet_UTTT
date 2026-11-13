@@ -1,18 +1,38 @@
 #include "MinimaxAI.h"
-#include <algorithm>
-#include <limits>
-#include <utility>
+#include <algorithm>   // std::fill
+#include <climits>     // INT_MIN, INT_MAX
+#include <ctime>       // clock(), CLOCKS_PER_SEC
 #include <iostream>
+
+// =============================================================================
+//  Helpers locaux
+// =============================================================================
+
+// Convertit un budget en millisecondes en nombre de ticks d'horloge.
+// CLOCKS_PER_SEC varie selon la plateforme (1 000 000 sous Linux, 1000 sous
+// Windows/MinGW). On utilise long long pour eviter l'overflow.
+static clock_t msToTicks(int ms) {
+    return (clock_t)((long long)ms * CLOCKS_PER_SEC / 1000);
+}
+
+// =============================================================================
+//  Cycle de vie + reset
+// =============================================================================
 
 MinimaxAI::MinimaxAI(Winner myColor_, Winner opponentColor_, int maxDepth_, int budgetTime_)
     : myColor(myColor_), opponentColor(opponentColor_), maxDepth(maxDepth_),
       currentIterationDepth(maxDepth_), budgetMs(budgetTime_),
       aborted(false), nodeCount(0),
-      tt(TT_SIZE) {
-    // tt initialise a TT_EMPTY (bound=0, hash=0) par defaut grace au constructeur du vector
+      tt(TT_SIZE),
+      bookEnabled(false), bookMaxPly(12),
+      bookExtraDepth(4), bookExtraBudgetMs(5000) {
+    // tt est initialisee avec des entrees TT_EMPTY grace au constructeur du vector.
     resetSearchState();
 }
 
+// Reinitialise killers + history. Appele avant chaque nouvelle recherche
+// (= avant chaque coup) ; les valeurs sont conservees entre les iterations
+// d'iterative deepening DANS la meme recherche.
 void MinimaxAI::resetSearchState() {
     for (int p = 0; p < MAX_PLY; ++p) {
         killerMoves[p][0] = GameMove{-1, -1};
@@ -23,59 +43,128 @@ void MinimaxAI::resetSearchState() {
             historyTable[s][c] = 0;
 }
 
-bool MinimaxAI::timeExceeded() {
-    if (budgetMs <= 0) return false;
-    // On n'appelle pas now() a chaque noeud (c'est cher) : un check tous les 4096 noeuds
-    if ((++nodeCount & 0xFFF) != 0) return aborted;
-    if (std::chrono::steady_clock::now() >= deadline) aborted = true;
-    return aborted;
-}
-
 void MinimaxAI::clearTT() {
     std::fill(tt.begin(), tt.end(), TTEntry{0, 0, 0, TT_EMPTY, {-1, -1}});
 }
 
-GameMove MinimaxAI::findBestMove(UltimateBoard& board) {
-    auto searchStart = std::chrono::steady_clock::now();
+// =============================================================================
+//  Opening book : activation / sauvegarde
+// =============================================================================
 
+void MinimaxAI::enableBook(const std::string& filename,
+                           int bookMaxPly_,
+                           int extraDepth,
+                           int extraBudgetMs) {
+    bookEnabled       = true;
+    bookFilename      = filename;
+    bookMaxPly        = bookMaxPly_;
+    bookExtraDepth    = extraDepth;
+    bookExtraBudgetMs = extraBudgetMs;
+    book.load(filename);
+}
+
+void MinimaxAI::saveBook() const {
+    if (!bookEnabled) return;
+    book.save(bookFilename);
+}
+
+// =============================================================================
+//  Time control
+// =============================================================================
+
+// Verifie si on a depasse le deadline. Appel a clock() est cher : on ne le
+// fait qu'un noeud sur 4096 (test sur les 12 bits de poids faible de nodeCount).
+bool MinimaxAI::timeExceeded() {
+    if (budgetMs <= 0) return false;
+    if ((++nodeCount & 0xFFF) != 0) return aborted;
+    if (clock() >= deadline) aborted = true;
+    return aborted;
+}
+
+// =============================================================================
+//  findBestMove : point d'entree depuis le manager
+// =============================================================================
+//
+//  Sequence :
+//   1) Generer les coups legaux a la racine.
+//   2) Si l'opening book a une reponse pour cette position, la jouer direct.
+//   3) Determiner le regime de recherche (early game = deep think, sinon
+//      regime normal).
+//   4) Iterative deepening : depth 1, 2, 3, ... jusqu'au plafond ou timeout.
+//   5) Eventuellement ecrire le coup choisi dans le livre.
+//   6) Remplir SearchInfo pour le logging.
+//
+// =============================================================================
+GameMove MinimaxAI::findBestMove(UltimateBoard& board) {
+    clock_t searchStart = clock();
+
+    // -- (1) Coups legaux a la racine ----------------------------------------
     GameMove moves[81];
     int rootN = board.fillLegalMoves(moves);
-    if (rootN == 0) return {0, 0};
+    if (rootN == 0) return {0, 0}; // securite : aucun coup possible
 
-    // Detection : un coup gagnait-il une sous-grille ? (avant de choisir)
+    // -- Diagnostic : un coup gagnait-il une sous-grille ? -------------------
     bool hadLocalWin = false;
     for (int i = 0; i < rootN; ++i) {
         int sR = moves[i].row / 3, sC = moves[i].col / 3;
         int lR = moves[i].row % 3, lC = moves[i].col % 3;
-        if (wouldCompleteLine(board.getSubBoard(sR, sC), lR, lC, myColor)) {
+        if (board.getSubBoard(sR, sC).wouldCompleteLine(lR, lC, myColor)) {
             hadLocalWin = true;
             break;
         }
     }
 
-    // Setup du budget de temps (si configure)
-    aborted = false;
-    nodeCount = 0;
-    if (budgetMs > 0) {
-        deadline = std::chrono::steady_clock::now()
-                 + std::chrono::milliseconds(budgetMs);
+    // -- (2) Opening book : reponse instantanee si position connue -----------
+    uint64_t hash = board.getHash();
+    if (bookEnabled) {
+        GameMove bookMove;
+        if (book.lookup(hash, bookMove) && board.isValidMove(bookMove)) {
+            int sR = bookMove.row / 3, sC = bookMove.col / 3;
+            int lR = bookMove.row % 3, lC = bookMove.col % 3;
+            bool tookWin = board.getSubBoard(sR, sC).wouldCompleteLine(lR, lC, myColor);
+
+            lastInfo.bestMove        = bookMove;
+            lastInfo.depthReached    = -1; // sentinelle "reponse du livre"
+            lastInfo.score           = 0;
+            lastInfo.elapsedMs       = 0;
+            lastInfo.legalMovesCount = rootN;
+            lastInfo.hadLocalWin     = hadLocalWin;
+            lastInfo.tookLocalWin    = tookWin;
+            return bookMove;
+        }
     }
 
-    // Reset killers + history a chaque nouvelle position au root.
-    // (Conserves entre iterations ID dans la meme recherche.)
+    // -- (3) Regime de recherche : early-game ou normal ----------------------
+    int  moveCount       = board.getMoveCount();
+    bool earlyGame       = bookEnabled && (moveCount < bookMaxPly);
+    int  effectiveMaxDepth = earlyGame ? (maxDepth + bookExtraDepth) : maxDepth;
+    int  effectiveBudgetMs = (budgetMs > 0)
+                           ? (earlyGame ? (budgetMs + bookExtraBudgetMs) : budgetMs)
+                           : 0;
+
+    // Setup du time control
+    aborted   = false;
+    nodeCount = 0;
+    if (effectiveBudgetMs > 0) {
+        deadline = clock() + msToTicks(effectiveBudgetMs);
+    }
+
+    // Reset killers + history pour cette nouvelle position
     resetSearchState();
 
-    // Resultat de la derniere iteration COMPLETEE (fallback si on est interrompu)
-    GameMove bestMove = moves[0];
-    int bestScore = 0;
-    int reachedDepth = 0;
+    // Resultat de la derniere iteration COMPLETEE (fallback si timeout)
+    GameMove bestMove     = moves[0];
+    int      bestScore    = 0;
+    int      reachedDepth = 0;
 
-    // ------ Iterative deepening ------
-    for (int curDepth = 1; curDepth <= maxDepth; ++curDepth) {
+    // -- (4) Iterative deepening --------------------------------------------
+    // Chaque iteration profite du remplissage de la TT par la precedente :
+    // le best move trouve a depth d-1 est essaye en premier a depth d,
+    // ce qui maximise les coupures alpha-beta.
+    for (int curDepth = 1; curDepth <= effectiveMaxDepth; ++curDepth) {
         currentIterationDepth = curDepth;
 
-        // On ordonne au root avec le meilleur coup connu (typiquement issu de l'iteration precedente,
-        // recupere via la TT puisque ttStore a ete fait en fin d'iteration).
+        // Recupere le best move connu pour cette position (de l'iter precedente)
         GameMove ttMove{-1, -1};
         bool hasTT = false;
         {
@@ -87,10 +176,11 @@ GameMove MinimaxAI::findBestMove(UltimateBoard& board) {
         }
         orderMoves(board, moves, rootN, myColor, hasTT ? &ttMove : nullptr, 0);
 
-        GameMove iterBestMove = moves[0];
-        int iterBestScore = std::numeric_limits<int>::min();
-        int alpha = std::numeric_limits<int>::min();
-        int beta  = std::numeric_limits<int>::max();
+        // Boucle sur les coups racines de cette iteration
+        GameMove iterBestMove  = moves[0];
+        int      iterBestScore = INT_MIN;
+        int      alpha = INT_MIN;
+        int      beta  = INT_MAX;
 
         for (int i = 0; i < rootN; ++i) {
             board.playMove(moves[i], myColor);
@@ -101,47 +191,48 @@ GameMove MinimaxAI::findBestMove(UltimateBoard& board) {
 
             if (score > iterBestScore) {
                 iterBestScore = score;
-                iterBestMove = moves[i];
+                iterBestMove  = moves[i];
             }
-            alpha = std::max(alpha, iterBestScore);
+            if (iterBestScore > alpha) alpha = iterBestScore;
         }
 
-        if (aborted) break; // on garde le resultat de l'iteration precedente
+        if (aborted) break; // garde le resultat de l'iteration precedente
 
         // Iteration completee : on commit
-        bestMove  = iterBestMove;
-        bestScore = iterBestScore;
+        bestMove     = iterBestMove;
+        bestScore    = iterBestScore;
         reachedDepth = curDepth;
 
-        // On stocke le resultat du root dans la TT pour booster l'iteration suivante
+        // Stocker le resultat du root dans la TT pour booster l'iteration suivante
         ttStore(board.getHash(), bestScore, curDepth, TT_EXACT, bestMove, 0);
 
         // Mat trouve : inutile de chercher plus profond
         if (bestScore >= MATE_THRESHOLD || bestScore <= -MATE_THRESHOLD) break;
 
-        // Si la prochaine iteration n'a aucune chance de tenir dans le budget restant,
-        // on s'arrete maintenant pour garder un coup propre. Heuristique : la profondeur
-        // suivante coute typiquement 3-5x l'actuelle. Si on a deja consomme plus du tiers
-        // du budget, on coupe.
-        if (budgetMs > 0) {
-            auto now = std::chrono::steady_clock::now();
-            auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                deadline - now).count();
-            if (remaining <= budgetMs / 3) break;
+        // Si la prochaine iteration n'a aucune chance de tenir dans le budget
+        // restant, on coupe (heuristique : depth+1 coute typiquement 3-5x).
+        if (effectiveBudgetMs > 0) {
+            clock_t remainingTicks = deadline - clock();
+            long    remainingMs    = (long)((long long)remainingTicks * 1000 / CLOCKS_PER_SEC);
+            if (remainingMs <= effectiveBudgetMs / 3) break;
         }
     }
 
-    // Remplir les infos de diagnostic
-    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                       std::chrono::steady_clock::now() - searchStart).count();
+    // -- (5) Sauvegarde dans le livre si early game --------------------------
+    if (earlyGame && bestMove.row >= 0 && bestMove.col >= 0) {
+        book.insert(hash, bestMove);
+    }
+
+    // -- (6) Remplir SearchInfo pour le logging ------------------------------
+    long elapsedMs = (long)((long long)(clock() - searchStart) * 1000 / CLOCKS_PER_SEC);
     {
         int sR = bestMove.row / 3, sC = bestMove.col / 3;
         int lR = bestMove.row % 3, lC = bestMove.col % 3;
-        bool tookWin = wouldCompleteLine(board.getSubBoard(sR, sC), lR, lC, myColor);
+        bool tookWin = board.getSubBoard(sR, sC).wouldCompleteLine(lR, lC, myColor);
         lastInfo.bestMove        = bestMove;
         lastInfo.depthReached    = reachedDepth;
         lastInfo.score           = bestScore;
-        lastInfo.elapsedMs       = (long)elapsed;
+        lastInfo.elapsedMs       = elapsedMs;
         lastInfo.legalMovesCount = rootN;
         lastInfo.hadLocalWin     = hadLocalWin;
         lastInfo.tookLocalWin    = tookWin;
@@ -150,37 +241,48 @@ GameMove MinimaxAI::findBestMove(UltimateBoard& board) {
     return bestMove;
 }
 
-// ============================================================
-//                       MINIMAX + ALPHA-BETA + TT
-// ============================================================
-
+// =============================================================================
+//  minimax : recursion alpha-beta avec sondage/ecriture TT
+// =============================================================================
+//
+//  Retourne le score de la position (du point de vue de myColor) en jouant
+//  une recherche minimax de profondeur `depth` avec coupures alpha-beta.
+//
+//  La TT sert a 2 choses :
+//   - rendre directement un score si la position a deja ete cherchee au moins
+//     aussi profondement et que les bornes le permettent ;
+//   - sinon, fournir le best move precedent pour le move ordering.
+//
+//  En cas de beta-cutoff, on met a jour killers + history pour booster
+//  l'ordre des coups dans les noeuds freres au meme ply.
+// =============================================================================
 int MinimaxAI::minimax(UltimateBoard& board, int depth, int alpha, int beta, bool maximizing) {
-    // Time control : si le budget est depasse, on remonte sans plus chercher.
-    // La valeur retournee n'a pas d'importance car findBestMove jettera l'iteration.
+    // Time control : on remonte sans plus chercher si on est en panne de temps.
+    // La valeur retournee n'a pas d'importance, findBestMove jettera l'iteration.
     if (timeExceeded()) return 0;
 
     int plyFromRoot = currentIterationDepth - depth;
-    int alphaOrig = alpha;
-    int betaOrig  = beta;
+    int alphaOrig   = alpha;
+    int betaOrig    = beta;
 
-    // Etats terminaux
+    // -- Etats terminaux ----------------------------------------------------
     Winner w = board.getWinner();
-    if (w == myColor)        return WIN_SCORE  - plyFromRoot;
-    if (w == opponentColor)  return -WIN_SCORE + plyFromRoot;
+    if (w == myColor)       return  WIN_SCORE - plyFromRoot; // gagne tot > gagne tard
+    if (w == opponentColor) return -WIN_SCORE + plyFromRoot;
     if (board.isTerminal()) {
-        // Pas de gagnant 3-en-ligne mais board fini : tiebreaker par nombre
-        // de sous-grilles. Le moteur du prof utilise probablement cette regle.
+        // Plateau plein sans 3-en-ligne global -> tiebreaker par nombre de
+        // sous-grilles gagnees (regle utilisee par le moteur du prof).
         int myCount  = board.countSubBoardsWon(myColor);
         int oppCount = board.countSubBoardsWon(opponentColor);
         if (myCount > oppCount) return  (WIN_SCORE - 100) - plyFromRoot;
         if (myCount < oppCount) return -(WIN_SCORE - 100) + plyFromRoot;
         return 0;
     }
-    if (depth <= 0)          return evaluate(board, maximizing);
+    if (depth <= 0) return evaluate(board, maximizing);
 
     uint64_t hash = board.getHash();
 
-    // ----- TT probe -----
+    // -- TT probe -----------------------------------------------------------
     GameMove ttMove{-1, -1};
     bool hasTTMove = false;
     {
@@ -190,16 +292,17 @@ int MinimaxAI::minimax(UltimateBoard& board, int depth, int alpha, int beta, boo
                 ttMove = e.bestMove;
                 hasTTMove = true;
             }
-            if ((int)e.depth >= depth) {
+            // Entree assez profonde -> on peut potentiellement renvoyer son score.
+            if (e.depth >= depth) {
                 int s = adjustScoreFromTT(e.score, plyFromRoot);
-                if (e.bound == TT_EXACT) return s;
-                if (e.bound == TT_LOWER && s >= beta)  return s;
-                if (e.bound == TT_UPPER && s <= alpha) return s;
+                if (e.bound == TT_EXACT)                  return s;
+                if (e.bound == TT_LOWER && s >= beta)     return s;
+                if (e.bound == TT_UPPER && s <= alpha)    return s;
             }
         }
     }
 
-    // ----- Generation + ordre des coups (zero alloc) -----
+    // -- Generation + ordre des coups (zero allocation) ---------------------
     GameMove moves[81];
     int n = board.fillLegalMoves(moves);
     if (n == 0) return evaluate(board, maximizing);
@@ -207,25 +310,22 @@ int MinimaxAI::minimax(UltimateBoard& board, int depth, int alpha, int beta, boo
     Winner sideToMove = maximizing ? myColor : opponentColor;
     orderMoves(board, moves, n, sideToMove, hasTTMove ? &ttMove : nullptr, plyFromRoot);
 
-    // ----- Recherche -----
-    int best;
+    // -- Boucle alpha-beta ---------------------------------------------------
+    int      best;
     GameMove bestMove = moves[0];
-    // Index pour killer/history : 0 = myColor (= maximizing), 1 = opponent
-    int sideIdx = maximizing ? 0 : 1;
+    int      sideIdx  = maximizing ? 0 : 1; // index pour killers/history
 
     if (maximizing) {
-        best = std::numeric_limits<int>::min();
+        best = INT_MIN;
         for (int i = 0; i < n; ++i) {
             board.playMove(moves[i], myColor);
             int score = minimax(board, depth - 1, alpha, beta, false);
             board.undoMove();
-            if (score > best) {
-                best = score;
-                bestMove = moves[i];
-            }
+            if (score > best) { best = score; bestMove = moves[i]; }
             if (best > alpha) alpha = best;
             if (beta <= alpha) {
-                // Beta-cutoff : on enregistre killer + history pour booster les freres
+                // Beta-cutoff : on enregistre killer + history pour booster
+                // l'ordre des coups dans les noeuds freres.
                 if (plyFromRoot < MAX_PLY) {
                     GameMove& k0 = killerMoves[plyFromRoot][0];
                     if (k0.row != moves[i].row || k0.col != moves[i].col) {
@@ -239,15 +339,12 @@ int MinimaxAI::minimax(UltimateBoard& board, int depth, int alpha, int beta, boo
             }
         }
     } else {
-        best = std::numeric_limits<int>::max();
+        best = INT_MAX;
         for (int i = 0; i < n; ++i) {
             board.playMove(moves[i], opponentColor);
             int score = minimax(board, depth - 1, alpha, beta, true);
             board.undoMove();
-            if (score < best) {
-                best = score;
-                bestMove = moves[i];
-            }
+            if (score < best) { best = score; bestMove = moves[i]; }
             if (best < beta) beta = best;
             if (beta <= alpha) {
                 if (plyFromRoot < MAX_PLY) {
@@ -264,37 +361,44 @@ int MinimaxAI::minimax(UltimateBoard& board, int depth, int alpha, int beta, boo
         }
     }
 
-    // ----- TT store -----
+    // -- TT store ------------------------------------------------------------
+    // Type de borne en fonction du resultat par rapport aux bornes d'entree :
+    //   - best <= alphaOrig : failed-low  -> borne SUPERIEURE (UPPER)
+    //   - best >= betaOrig  : failed-high -> borne INFERIEURE (LOWER)
+    //   - sinon             : valeur EXACTe dans la fenetre
     TTBound boundType;
-    if      (best <= alphaOrig) boundType = TT_UPPER; // failed-low : borne sup
-    else if (best >= betaOrig)  boundType = TT_LOWER; // failed-high : borne inf
+    if      (best <= alphaOrig) boundType = TT_UPPER;
+    else if (best >= betaOrig)  boundType = TT_LOWER;
     else                        boundType = TT_EXACT;
     ttStore(hash, best, depth, boundType, bestMove, plyFromRoot);
 
     return best;
 }
 
-// ============================================================
-//                  TRANSPOSITION TABLE HELPERS
-// ============================================================
+// =============================================================================
+//  Transposition table : store + correction de mate distance
+// =============================================================================
 
+// Strategie de remplacement : on ecrase l'entree existante si elle est vide,
+// si la position differe (collision), ou si la nouvelle profondeur est >=.
+// On garde donc les analyses les plus profondes.
 void MinimaxAI::ttStore(uint64_t hash, int score, int depth, TTBound bound,
                         GameMove bestMove, int plyFromRoot) {
     TTEntry& e = tt[hash & TT_MASK];
-    // Strategie de remplacement : on remplace si l'entree est vide,
-    // si la position differe, ou si la nouvelle profondeur est >= a l'ancienne.
-    if (e.bound == TT_EMPTY || e.hash != hash || depth >= (int)e.depth) {
+    if (e.bound == TT_EMPTY || e.hash != hash || depth >= e.depth) {
         e.hash     = hash;
-        e.score    = (int32_t)adjustScoreToTT(score, plyFromRoot);
-        e.depth    = (int8_t)depth;
-        e.bound    = (uint8_t)bound;
+        e.score    = adjustScoreToTT(score, plyFromRoot);
+        e.depth    = depth;
+        e.bound    = bound;
         e.bestMove = bestMove;
     }
 }
 
-// Correction "mate distance" : on stocke des scores independants de la distance au root,
-// puis on les re-ajuste a la lecture. Sans ca, un mate cache risque d'etre interprete
-// avec la mauvaise profondeur si la position est retrouvee ailleurs dans l'arbre.
+// Correction "mate distance" : un score de mat est intrinsequement lie a la
+// distance au noeud racine de la recherche en cours. Si on stocke tel quel,
+// on ne peut pas reutiliser l'entree quand on rencontre la position a une
+// autre distance. Solution classique : on stocke un score "ajuste" qui ne
+// depend plus que de la position, puis on le reconvertit a la lecture.
 int MinimaxAI::adjustScoreToTT(int score, int plyFromRoot) const {
     if (score >=  MATE_THRESHOLD) return score + plyFromRoot;
     if (score <= -MATE_THRESHOLD) return score - plyFromRoot;
@@ -307,49 +411,56 @@ int MinimaxAI::adjustScoreFromTT(int score, int plyFromRoot) const {
     return score;
 }
 
-// ============================================================
-//                       MOVE ORDERING
-// ============================================================
-
+// =============================================================================
+//  Move ordering
+// =============================================================================
+//
+//  Plus on met les bons coups en debut de tableau, plus alpha-beta coupe tot.
+//  Sources de signal (additionnees) :
+//    - score statique du coup (scoreMove) : tactique locale
+//    - coup TT (de l'iteration ou de la recherche precedente) : prioritaire
+//    - killer moves au meme ply : ont deja cause un cutoff dans un frere
+//    - history heuristic : statistique cumulative sur le run en cours
+//
+//  Tri par insertion : zero allocation, optimal pour n <= ~30 (cas UTTT).
+// =============================================================================
 void MinimaxAI::orderMoves(const UltimateBoard& board,
                            GameMove* moves, int n,
                            Winner player,
                            const GameMove* priorityMove,
                            int plyFromRoot) const {
-    // Tableaux paralleles stack-alloues (pas de heap)
-    int scores[81];
+    int scores[81]; // stack-alloue, pas de heap
 
-    int sideIdx = (player == myColor) ? 0 : 1;
+    int  sideIdx    = (player == myColor) ? 0 : 1;
     bool hasKillers = (plyFromRoot < MAX_PLY);
     GameMove k0 = hasKillers ? killerMoves[plyFromRoot][0] : GameMove{-1, -1};
     GameMove k1 = hasKillers ? killerMoves[plyFromRoot][1] : GameMove{-1, -1};
 
+    // 1) Compute scores
     for (int i = 0; i < n; ++i) {
         int s = scoreMove(board, moves[i], player);
 
-        // Coup TT (issu d'une recherche precedente) : priorite max
+        // Coup TT : priorite massive
         if (priorityMove
             && priorityMove->row == moves[i].row
             && priorityMove->col == moves[i].col) {
             s += 1000000;
         }
-
-        // Killer moves : coups qui ont cause un cutoff au meme ply
+        // Killer moves au meme ply
         if (hasKillers) {
-            if (k0.row == moves[i].row && k0.col == moves[i].col)      s += 800;
+            if      (k0.row == moves[i].row && k0.col == moves[i].col) s += 800;
             else if (k1.row == moves[i].row && k1.col == moves[i].col) s += 400;
         }
-
-        // History heuristic : score cumule des cutoffs causes par cette cellule (ce side)
+        // History heuristic (echelle : /64 pour rester dans le meme ordre que les bonus)
         int cellIdx = moves[i].row * 9 + moves[i].col;
         s += historyTable[sideIdx][cellIdx] / 64;
 
         scores[i] = s;
     }
 
-    // Tri par insertion : rapide pour n <= ~30 (cas typique en UTTT) et zero alloc
+    // 2) Tri par insertion (n petit, donc O(n^2) est plus rapide que std::sort)
     for (int i = 1; i < n; ++i) {
-        int s = scores[i];
+        int      s = scores[i];
         GameMove m = moves[i];
         int j = i - 1;
         while (j >= 0 && scores[j] < s) {
@@ -362,6 +473,12 @@ void MinimaxAI::orderMoves(const UltimateBoard& board,
     }
 }
 
+// Score statique d'un coup pour le move ordering. Capture les principaux
+// signaux tactiques rapides a calculer (sans appel recursif au minimax) :
+//   - gagner la sous-grille locale (gros bonus)
+//   - bloquer une victoire adverse dans cette sous-grille
+//   - eviter d'envoyer l'adversaire en bonne posture (cible apres notre coup)
+//   - bonus de position (centre > coins > bords)
 int MinimaxAI::scoreMove(const UltimateBoard& board,
                          const GameMove& m,
                          Winner player) const {
@@ -369,6 +486,7 @@ int MinimaxAI::scoreMove(const UltimateBoard& board,
     int lR = m.row % 3, lC = m.col % 3;
     Winner opp = (player == IA) ? PLAYER : IA;
 
+    // Bonus de position globale (la sous-grille ou on joue est-elle "centrale" ?)
     static const int globalPos[3][3] = {
         {3, 2, 3},
         {2, 4, 2},
@@ -378,95 +496,66 @@ int MinimaxAI::scoreMove(const UltimateBoard& board,
     int score = 0;
     const SubBoard& localSb = board.getSubBoard(sR, sC);
 
-    bool wins = wouldCompleteLine(localSb, lR, lC, player);
+    // (a) Gagner la sous-grille locale
+    bool wins = localSb.wouldCompleteLine(lR, lC, player);
     if (wins) {
         score += 10000 + 200 * globalPos[sR][sC];
     }
-
-    if (wouldCompleteLine(localSb, lR, lC, opp)) {
+    // (b) Bloquer une victoire adverse imminente sur la meme case
+    if (localSb.wouldCompleteLine(lR, lC, opp)) {
         score += 5000;
     }
 
+    // (c) Effet sur la cible : ou envoie-t-on l'adversaire ?
+    // Cas particulier : le coup atterrit dans la sous-grille qu'il cible.
     bool nextIsLocal = (sR == lR && sC == lC);
     if (nextIsLocal) {
-        if (wins) score -= 4000; // on envoie l'adversaire en choix libre
+        // Si on gagne la sous-grille ici, l'adversaire sera envoye dedans
+        // (terminee) -> choix libre pour lui, mauvais.
+        if (wins) score -= 4000;
     } else {
         const SubBoard& nextSb = board.getSubBoard(lR, lC);
         if (nextSb.isFinished()) {
+            // Choix libre pour l'adversaire = potentiellement dangereux
             score -= 4000;
-        } else if (subBoardHasOneMoveWin(nextSb, opp)) {
+        } else if (nextSb.hasOneMoveWin(opp)) {
+            // On l'envoie dans une sous-grille ou il peut gagner en 1 coup
             score -= 2500;
-        } else if (subBoardHasOneMoveWin(nextSb, player)) {
+        } else if (nextSb.hasOneMoveWin(player)) {
+            // On l'envoie dans une sous-grille ou WE pouvons gagner en 1 coup
+            // (utile si on rejoue ensuite via free choice)
             score += 800;
         }
     }
 
-    if (lR == 1 && lC == 1) score += 30;
-    else if ((lR == 0 || lR == 2) && (lC == 0 || lC == 2)) score += 20;
-    else score += 10;
+    // (d) Position locale : centre > coins > bords
+    if      (lR == 1 && lC == 1)                            score += 30;
+    else if ((lR == 0 || lR == 2) && (lC == 0 || lC == 2))  score += 20;
+    else                                                    score += 10;
 
+    // (e) Bonus de position globale (recompense les sous-grilles "fortes")
     score += 5 * globalPos[sR][sC];
 
     return score;
 }
 
-bool MinimaxAI::wouldCompleteLine(const SubBoard& sb, int lR, int lC, Winner player) const {
-    if (sb.getCell(lR, lC) != NO_WINNER) return false;
-
-    bool line = true;
-    for (int j = 0; j < 3; ++j) {
-        if (j == lC) continue;
-        if (sb.getCell(lR, j) != player) { line = false; break; }
-    }
-    if (line) return true;
-
-    line = true;
-    for (int i = 0; i < 3; ++i) {
-        if (i == lR) continue;
-        if (sb.getCell(i, lC) != player) { line = false; break; }
-    }
-    if (line) return true;
-
-    if (lR == lC) {
-        line = true;
-        for (int i = 0; i < 3; ++i) {
-            if (i == lR) continue;
-            if (sb.getCell(i, i) != player) { line = false; break; }
-        }
-        if (line) return true;
-    }
-
-    if (lR + lC == 2) {
-        line = true;
-        for (int i = 0; i < 3; ++i) {
-            int j = 2 - i;
-            if (i == lR) continue;
-            if (sb.getCell(i, j) != player) { line = false; break; }
-        }
-        if (line) return true;
-    }
-
-    return false;
-}
-
-bool MinimaxAI::subBoardHasOneMoveWin(const SubBoard& sb, Winner player) const {
-    if (sb.isFinished()) return false;
-    for (int r = 0; r < 3; ++r) {
-        for (int c = 0; c < 3; ++c) {
-            if (sb.getCell(r, c) != NO_WINNER) continue;
-            if (wouldCompleteLine(sb, r, c, player)) return true;
-        }
-    }
-    return false;
-}
-
-// ============================================================
-//                       EVALUATION
-// ============================================================
-
+// =============================================================================
+//  Evaluation (heuristique statique en feuille de l'arbre)
+// =============================================================================
+//
+//  Ingredients :
+//   - sous-grilles gagnees, ponderees par position globale
+//   - menaces 2-en-ligne au niveau global (avec fork detection)
+//   - lignes globales encore ouvertes (gradient)
+//   - facteur "trait" : ou est envoye le joueur au trait ?
+//   - eval interne pour les sous-grilles non terminees (positions des pions,
+//     menaces 2-en-ligne, mini-forks)
+//
+//  Tous les scores sont du point de vue de myColor.
+// =============================================================================
 int MinimaxAI::evaluate(const UltimateBoard& board, bool meToMove) const {
     Winner globalWinner = board.getWinner();
-    if (globalWinner == myColor) return WIN_SCORE;
+    if (globalWinner == myColor)       return  WIN_SCORE;
     if (globalWinner == opponentColor) return -WIN_SCORE;
 
     static const int posBonus[3][3] = {
@@ -477,9 +566,10 @@ int MinimaxAI::evaluate(const UltimateBoard& board, bool meToMove) const {
 
     int score = 0;
 
-    // On encode les sous-grilles dans un tableau adapte a countTwoInLine.
-    // Cas special : sous-grille pleine sans vainqueur (nulle) -> on la marque
-    // IA_AND_PLAYER, qui sera vu comme un blocker pour les deux joueurs.
+    // --- (1) Etat des 9 sous-grilles ----------------------------------------
+    // On encode dans un tableau adapte aux fonctions de comptage de lignes.
+    // Cas special : sous-grille pleine sans gagnant (nulle) -> IA_AND_PLAYER,
+    // qui est vu comme un bloqueur pour les deux joueurs.
     Winner subWinners[3][3];
     for (int r = 0; r < 3; ++r) {
         for (int c = 0; c < 3; ++c) {
@@ -487,53 +577,63 @@ int MinimaxAI::evaluate(const UltimateBoard& board, bool meToMove) const {
             Winner w = sb.getWinner();
 
             if (w == NO_WINNER && sb.isFinished()) {
-                subWinners[r][c] = IA_AND_PLAYER; // nulle -> ligne morte
+                subWinners[r][c] = IA_AND_PLAYER;
             } else {
                 subWinners[r][c] = w;
             }
 
             if (w == myColor) {
-                score += 80 * posBonus[r][c];   // (C) 50 -> 80
+                score += 65 * posBonus[r][c];
             } else if (w == opponentColor) {
-                score -= 80 * posBonus[r][c];   // (C) 50 -> 80
+                score -= 65 * posBonus[r][c];
             } else if (!sb.isFinished()) {
+                // Sous-grille en cours : on regarde aussi son etat interne
                 score += evaluateSubBoard(sb, myColor);
                 score -= evaluateSubBoard(sb, opponentColor);
             }
-            // sous-grille nulle : 0 net (deja correct)
+            // (sous-grille nulle : contribution nette nulle, deja correct)
         }
     }
 
-    // (C) 2-en-ligne global : tres gros poids car une menace globale
-    //     est presque gagnante. Asymetrie : on penalise plus l'adversaire
-    //     pour favoriser la defense quand on en a besoin.
-    score += 200 * countTwoInLine(subWinners, myColor);
-    score -= 250 * countTwoInLine(subWinners, opponentColor);
+    // --- (2) Menaces 2-en-ligne au niveau global ----------------------------
+    // Asymetrie volontaire : on penalise un peu plus les menaces adverses
+    // pour pousser la defense quand elle est necessaire.
+    int myThreats  = countTwoInLine(subWinners, myColor);
+    int oppThreats = countTwoInLine(subWinners, opponentColor);
+    score += 140 * myThreats;
+    score -= 180 * oppThreats;
 
-    // (D) Open lines : nombre de lignes globales encore gagnables pour chacun.
-    //     Donne du gradient a l'eval meme sans menace 2-en-ligne.
+    // --- (3) Forks au niveau global -----------------------------------------
+    // Avoir 2+ menaces simultanees = l'adversaire ne peut bloquer qu'une seule
+    // -> quasi-mat. Tres gros poids. Asymetrie marquee.
+    if (myThreats  >= 2) score += 800;
+    if (oppThreats >= 2) score -= 1000;
+
+    // --- (4) Lignes ouvertes (gradient meme sans menaces immediates) --------
     int myOpen  = countOpenLines(subWinners, myColor);
     int oppOpen = countOpenLines(subWinners, opponentColor);
     score += 25 * (myOpen - oppOpen);
 
-    // ---- Facteur target : ou doit jouer le joueur au trait ? (C: poids x2) ----
+    // --- (5) Facteur "trait" : ou doit jouer le side-to-move ? --------------
     int targetR = board.getTargetRow();
     int targetC = board.getTargetCol();
-    int sign = meToMove ? 1 : -1;
+    int sign    = meToMove ? 1 : -1; // un avantage du side-to-move est positif si c'est nous
 
     if (targetR == -1) {
-        // Choix libre : avantage de mobilite pour celui qui doit jouer
-        score += sign * 60;     // (C) 30 -> 60
+        // Choix libre : avantage de mobilite
+        score += sign * 60;
     } else {
         const SubBoard& target = board.getSubBoard(targetR, targetC);
         if (!target.isFinished()) {
             Winner self  = meToMove ? myColor : opponentColor;
             Winner other = meToMove ? opponentColor : myColor;
-            if (subBoardHasOneMoveWin(target, self)) {
-                score += sign * 120;  // (C) 60 -> 120
+            if (target.hasOneMoveWin(self)) {
+                // Le joueur au trait peut gagner cette sous-grille tout de suite
+                score += sign * 90;
             }
-            if (subBoardHasOneMoveWin(target, other)) {
-                score -= sign * 70;   // (C) 35 -> 70
+            if (target.hasOneMoveWin(other)) {
+                // L'autre y a une menace -> le trait doit defendre
+                score -= sign * 50;
             }
         }
     }
@@ -541,27 +641,8 @@ int MinimaxAI::evaluate(const UltimateBoard& board, bool meToMove) const {
     return score;
 }
 
-int MinimaxAI::countOpenLines(const Winner sw[3][3], Winner who) const {
-    // Une ligne est "ouverte" pour `who` si aucune de ses 3 cases ne contient
-    // d'adversaire (Winner != who && != NO_WINNER). Les sous-grilles nulles
-    // (encodees IA_AND_PLAYER en amont) bloquent donc bien les deux joueurs.
-    auto cellOk = [who](Winner x) {
-        return x == who || x == NO_WINNER;
-    };
-    auto isOpen = [&](Winner a, Winner b, Winner c) {
-        return cellOk(a) && cellOk(b) && cellOk(c);
-    };
-
-    int count = 0;
-    for (int i = 0; i < 3; ++i) {
-        if (isOpen(sw[i][0], sw[i][1], sw[i][2])) ++count;
-        if (isOpen(sw[0][i], sw[1][i], sw[2][i])) ++count;
-    }
-    if (isOpen(sw[0][0], sw[1][1], sw[2][2])) ++count;
-    if (isOpen(sw[0][2], sw[1][1], sw[2][0])) ++count;
-    return count;
-}
-
+// Eval interne d'une sous-grille non terminee. Encourage les positions
+// fortes (centre, coins) et les menaces (2-en-ligne, forks locaux).
 int MinimaxAI::evaluateSubBoard(const SubBoard& sb, Winner who) const {
     Winner cells[3][3];
     for (int r = 0; r < 3; ++r)
@@ -569,36 +650,54 @@ int MinimaxAI::evaluateSubBoard(const SubBoard& sb, Winner who) const {
             cells[r][c] = sb.getCell(r, c);
 
     int score = 0;
-    if (cells[1][1] == who) score += 3;
-    if (cells[0][0] == who) score += 2;
+    if (cells[1][1] == who) score += 3; // centre
+    if (cells[0][0] == who) score += 2; // 4 coins
     if (cells[0][2] == who) score += 2;
     if (cells[2][0] == who) score += 2;
     if (cells[2][2] == who) score += 2;
 
-    score += 5 * countTwoInLine(cells, who);
+    int threats = countTwoInLine(cells, who);
+    score += 5 * threats;
+    // Fork sous-grille : 2+ menaces simultanees = quasi-victoire locale
+    // (l'adversaire ne peut bloquer qu'une menace par coup).
+    if (threats >= 2) score += 40;
+
     return score;
 }
 
-int MinimaxAI::countTwoInLine(const Winner cells[3][3], Winner who) const {
-    // Une "menace" 2-en-ligne = exactement 2 cases a `who`, 1 case vide,
-    // ET aucune case "bloquante" (adversaire ou case nulle marquee IA_AND_PLAYER).
-    auto check = [&](Winner a, Winner b, Winner c) -> int {
-        int mine = 0;
-        bool blocked = false;
-        auto eat = [&](Winner x) {
-            if      (x == who)        mine++;
-            else if (x != NO_WINNER)  blocked = true; // adversaire ou nulle (mur)
-        };
-        eat(a); eat(b); eat(c);
-        return (mine == 2 && !blocked) ? 1 : 0;
-    };
-
-    int total = 0;
-    for (int i = 0; i < 3; ++i) {
-        total += check(cells[i][0], cells[i][1], cells[i][2]);
-        total += check(cells[0][i], cells[1][i], cells[2][i]);
+// Compte les lignes globales encore gagnables pour `who` : aucune cellule
+// ne doit etre adverse, ni une nulle (encodee IA_AND_PLAYER).
+// Iteration via SubBoard::LINES (precalculee, partagee).
+int MinimaxAI::countOpenLines(const Winner sw[3][3], Winner who) const {
+    int count = 0;
+    for (int i = 0; i < 8; ++i) {
+        bool open = true;
+        for (int k = 0; k < 3; ++k) {
+            int r = SubBoard::LINES[i][k][0];
+            int c = SubBoard::LINES[i][k][1];
+            Winner x = sw[r][c];
+            if (x != who && x != NO_WINNER) { open = false; break; }
+        }
+        if (open) ++count;
     }
-    total += check(cells[0][0], cells[1][1], cells[2][2]);
-    total += check(cells[0][2], cells[1][1], cells[2][0]);
+    return count;
+}
+
+// Compte les menaces "2-en-ligne" pour `who` : exactement 2 cases occupees
+// par who, 1 case vide, et aucune case adverse / nulle (bloqueur).
+int MinimaxAI::countTwoInLine(const Winner cells[3][3], Winner who) const {
+    int total = 0;
+    for (int i = 0; i < 8; ++i) {
+        int  mine    = 0;
+        bool blocked = false;
+        for (int k = 0; k < 3; ++k) {
+            int r = SubBoard::LINES[i][k][0];
+            int c = SubBoard::LINES[i][k][1];
+            Winner x = cells[r][c];
+            if (x == who)            mine++;
+            else if (x != NO_WINNER) blocked = true; // adversaire ou nulle
+        }
+        if (mine == 2 && !blocked) total++;
+    }
     return total;
 }
